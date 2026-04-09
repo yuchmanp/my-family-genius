@@ -25,4 +25,4 @@ alter table public.shopping_lists add column if not exists assignee text;
 alter table public.push_subscriptions rename column kid_name to member_name;
 alter table public.push_subscriptions drop constraint if exists push_subscriptions_kid_name_check;
 alter table public.push_subscriptions add constraint push_subscriptions_member_name_check
-  check (member_name in ('Jonatan', 'Ronit', 'Amit', 'Ido', 'Ofri'));
+  check (member_name in ('Parent1', 'Parent2', 'Kid1', 'Kid2', 'Kid3'));
