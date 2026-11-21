@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useRef, useOptimistic, useTransition, useMemo, useCallback, useEffect } from "react";
-import type { ShoppingList, ShoppingItem, ItemCategory } from "@/lib/database.types";
+import type { ShoppingList, ShoppingItem, ItemCategory, LinkedProductPrice, ProductSearchResult } from "@/lib/database.types";
+import { parseQuantity, lineCost, formatShekel } from "@/lib/price-estimate";
 import {
   deleteShoppingList,
   clearShoppingList,
@@ -11,16 +12,21 @@ import {
   updateShoppingItem,
   toggleShoppingItem,
   deleteShoppingItem,
+  searchProducts,
 } from "@/app/actions";
 
 export default function ShoppingListCard({
   list,
   items,
   knownItems = [],
+  prices = {},
+  pricesAsOf = null,
 }: {
   list: ShoppingList;
   items: ShoppingItem[];
   knownItems?: ItemCategory[];
+  prices?: Record<string, LinkedProductPrice>;
+  pricesAsOf?: string | null;
 }) {
   const [expanded, setExpanded] = useState(true);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -46,6 +52,7 @@ export default function ShoppingListCard({
       quantity: i.quantity,
       category: i.category,
       notes: i.notes,
+      product_code: i.product_code,
     }));
     setClearedItems(null);
     await restoreShoppingItems(toRestore);
@@ -76,6 +83,27 @@ export default function ShoppingListCard({
   }, [optimisticItems]);
 
   const checkedCount = optimisticItems.filter((i) => i.checked).length;
+
+  // Estimated cost of what's still left to buy
+  const estimate = useMemo(() => {
+    let regular = 0;
+    let withDeal = 0;
+    let priced = 0;
+    let unpriced = 0;
+    for (const item of optimisticItems) {
+      if (item.checked) continue;
+      const price = item.product_code ? prices[item.product_code] : undefined;
+      if (!price) {
+        unpriced++;
+        continue;
+      }
+      const cost = lineCost(price, parseQuantity(item.quantity));
+      regular += cost.regular;
+      withDeal += cost.withDeal;
+      priced++;
+    }
+    return { regular, withDeal, priced, unpriced };
+  }, [optimisticItems, prices]);
   const inputClass = "px-3 py-2 rounded-xl border-2 border-card-border bg-card text-sm focus:border-sage focus:outline-none transition-colors";
 
   return (
@@ -127,6 +155,26 @@ export default function ShoppingListCard({
 
       {expanded && (
         <div className="p-4 space-y-4 bg-card">
+          {estimate.priced > 0 && (
+            <div className="flex items-center flex-wrap gap-x-3 gap-y-1 px-3 py-2 rounded-xl bg-sage/10 text-sm">
+              <span className="font-medium">Est. {formatShekel(estimate.regular)}</span>
+              {estimate.withDeal < estimate.regular - 0.005 && (
+                <span className="text-honey">
+                  {formatShekel(estimate.withDeal)} with deals
+                </span>
+              )}
+              {estimate.unpriced > 0 && (
+                <span className="text-xs text-muted">
+                  +{estimate.unpriced} item{estimate.unpriced !== 1 ? "s" : ""} without a price
+                </span>
+              )}
+              {pricesAsOf && (
+                <span className="text-xs text-muted ml-auto">
+                  Shufersal prices, {new Date(pricesAsOf).toLocaleDateString("he-IL")}
+                </span>
+              )}
+            </div>
+          )}
           {clearedItems && (
             <div className="flex items-center justify-between px-3 py-2 rounded-xl bg-honey/10 border-2 border-honey/30 text-sm">
               <span className="text-honey">{clearedItems.length} item{clearedItems.length !== 1 ? "s" : ""} cleared</span>
@@ -184,6 +232,12 @@ export default function ShoppingListCard({
                           autoComplete="off"
                           className={`flex-1 min-w-[120px] ${inputClass}`}
                         />
+                        {item.product_code && (
+                          <ProductLinkToggle
+                            code={item.product_code}
+                            name={prices[item.product_code]?.name ?? item.product_code}
+                          />
+                        )}
                         <button
                           type="submit"
                           className="px-3 py-1 text-xs rounded-xl bg-sage text-white font-medium hover:opacity-90 shadow-sm transition-all active:scale-95"
@@ -205,6 +259,7 @@ export default function ShoppingListCard({
                     <ToggleableItem
                       key={item.id}
                       item={item}
+                      price={item.product_code ? prices[item.product_code] : undefined}
                       onToggle={() => setOptimisticItems(item.id)}
                       onEdit={() => setEditingId(item.id)}
                     />
@@ -226,12 +281,46 @@ export default function ShoppingListCard({
   );
 }
 
+function ProductLinkToggle({ code, name }: { code: string; name: string }) {
+  const [linked, setLinked] = useState(true);
+  return (
+    <span className="flex items-center gap-2 text-xs text-muted basis-full">
+      <input type="hidden" name="product_code" value={linked ? code : ""} />
+      {linked ? (
+        <>
+          <span dir="auto" className="truncate">Linked to: {name}</span>
+          <button
+            type="button"
+            onClick={() => setLinked(false)}
+            className="text-rose hover:underline shrink-0"
+          >
+            Unlink
+          </button>
+        </>
+      ) : (
+        <>
+          <span>Will be unlinked from Shufersal product</span>
+          <button
+            type="button"
+            onClick={() => setLinked(true)}
+            className="text-sage hover:underline shrink-0"
+          >
+            Undo
+          </button>
+        </>
+      )}
+    </span>
+  );
+}
+
 function ToggleableItem({
   item,
+  price,
   onToggle,
   onEdit,
 }: {
   item: ShoppingItem;
+  price?: LinkedProductPrice;
   onToggle: () => void;
   onEdit: () => void;
 }) {
@@ -273,6 +362,20 @@ function ToggleableItem({
             — {item.notes}
           </span>
         )}
+        {price && (
+          <span className="text-xs text-muted shrink-0">
+            {formatShekel(price.price)}{price.is_weighted ? "/kg" : ""}
+          </span>
+        )}
+        {price?.promo_description && (
+          <span
+            dir="auto"
+            title={price.promo_description}
+            className="text-[11px] px-1.5 py-0.5 rounded-lg bg-honey/15 text-honey shrink-0 max-w-[10rem] truncate"
+          >
+            {price.promo_description}
+          </span>
+        )}
       </form>
       <div className="flex gap-1 shrink-0">
         <button
@@ -306,8 +409,39 @@ function AddItemForm({
 }) {
   const [query, setQuery] = useState("");
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const [search, setSearch] = useState<{ q: string; results: ProductSearchResult[] }>({ q: "", results: [] });
+  const [linked, setLinked] = useState<ProductSearchResult | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const categoryRef = useRef<HTMLInputElement>(null);
+
+  // Debounced Shufersal product search
+  const trimmed = query.trim();
+  const wantsSearch = trimmed.length >= 2 && linked?.name !== query;
+  const products = wantsSearch && search.q === trimmed ? search.results : [];
+
+  useEffect(() => {
+    if (!wantsSearch) return;
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      let results: ProductSearchResult[] = [];
+      try {
+        results = await searchProducts(trimmed);
+      } catch {
+        // price data is optional
+      }
+      if (!cancelled) setSearch({ q: trimmed, results });
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [trimmed, wantsSearch]);
+
+  function pickProduct(p: ProductSearchResult) {
+    setQuery(p.name);
+    setLinked(p);
+    setShowSuggestions(false);
+  }
 
   const matches =
     query.length >= 1
@@ -331,11 +465,13 @@ function AddItemForm({
       action={async (fd) => {
         await addShoppingItem(fd);
         setQuery("");
+        setLinked(null);
         formRef.current?.reset();
       }}
       className="flex gap-2 flex-wrap"
     >
       <input type="hidden" name="list_id" value={listId} />
+      <input type="hidden" name="product_code" value={linked?.item_code ?? ""} />
       <div className="relative flex-1 min-w-[120px]">
         <input
           name="name"
@@ -346,13 +482,15 @@ function AddItemForm({
           onChange={(e) => {
             setQuery(e.target.value);
             setShowSuggestions(true);
+            // Typing over a picked product drops the link
+            if (linked && e.target.value !== linked.name) setLinked(null);
           }}
           onFocus={() => query.length >= 1 && setShowSuggestions(true)}
           onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
           className={inputClass + " w-full"}
         />
-        {showSuggestions && matches.length > 0 && (
-          <ul className="absolute z-20 left-0 right-0 top-full mt-1 bg-card border-2 border-card-border rounded-xl shadow-lg max-h-48 overflow-y-auto">
+        {showSuggestions && (matches.length > 0 || products.length > 0) && (
+          <ul className="absolute z-20 left-0 right-0 top-full mt-1 bg-card border-2 border-card-border rounded-xl shadow-lg max-h-72 overflow-y-auto">
             {matches.map((ki) => (
               <li key={ki.name}>
                 <button
@@ -366,7 +504,42 @@ function AddItemForm({
                 </button>
               </li>
             ))}
+            {products.length > 0 && (
+              <li className="px-3 pt-2 pb-1 text-[11px] font-medium text-muted uppercase tracking-wide border-t border-card-border">
+                Shufersal products
+              </li>
+            )}
+            {products.map((p) => (
+              <li key={p.item_code}>
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => pickProduct(p)}
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-sage/10 transition-colors flex items-center justify-between gap-2"
+                >
+                  <span dir="auto" className="min-w-0 truncate">
+                    {p.name}
+                    {p.manufacturer && <span className="text-xs text-muted"> · {p.manufacturer}</span>}
+                  </span>
+                  <span className="flex items-center gap-1.5 shrink-0">
+                    {p.promo_description && (
+                      <span dir="auto" title={p.promo_description} className="text-[11px] px-1.5 py-0.5 rounded-lg bg-honey/15 text-honey max-w-[7rem] truncate">
+                        {p.promo_description}
+                      </span>
+                    )}
+                    <span className="text-xs text-muted">
+                      {formatShekel(Number(p.price))}{p.is_weighted ? "/kg" : ""}
+                    </span>
+                  </span>
+                </button>
+              </li>
+            ))}
           </ul>
+        )}
+        {linked && (
+          <span className="absolute -bottom-4 left-1 text-[10px] text-sage">
+            Linked · {formatShekel(Number(linked.price))}
+          </span>
         )}
       </div>
       <input

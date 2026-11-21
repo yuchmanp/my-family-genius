@@ -30,6 +30,7 @@ export interface ShoppingItem {
   quantity: string | null;
   category: string | null;
   notes: string | null;
+  product_code: string | null;
   checked: boolean;
   created_at: string;
 }
@@ -155,4 +156,28 @@ export interface CalendarEntry {
   source_id: number;
   repeat?: "none" | "daily" | "weekly" | "monthly" | "yearly";
   memberName?: string;
+}
+
+/** Row returned by the search_shufersal_products RPC. */
+export interface ProductSearchResult {
+  item_code: string;
+  name: string;
+  manufacturer: string | null;
+  price: number;
+  unit_price: number | null;
+  unit_of_measure: string | null;
+  is_weighted: boolean;
+  promo_description: string | null;
+  promo_unit_price: number | null;
+  promo_min_qty: number | null;
+}
+
+/** Price info for a shopping item linked to a Shufersal product. */
+export interface LinkedProductPrice {
+  name: string;
+  price: number;
+  is_weighted: boolean;
+  promo_description: string | null;
+  promo_unit_price: number | null;
+  promo_min_qty: number | null;
 }

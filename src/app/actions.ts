@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { requireAuth, getCurrentMember } from "@/lib/supabase-server";
 import { notifyParents, notifyParents_mealRequest, notifyFamilyExcept, notifyParentsExcept, notifyEventInvite } from "@/lib/notify-parents";
 import { sendInviteEmail } from "@/lib/send-invite-email";
+import type { ProductSearchResult } from "@/lib/database.types";
 
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
@@ -23,6 +24,12 @@ function safeJsonArray<T>(json: string): T[] {
   } catch {
     return [];
   }
+}
+
+/** Shufersal item codes are numeric barcodes. Returns null for empty/invalid input. */
+function productCode(formData: FormData): string | null {
+  const raw = ((formData.get("product_code") as string) ?? "").trim();
+  return /^\d{1,20}$/.test(raw) ? raw : null;
 }
 
 function requireString(formData: FormData, field: string): string {
@@ -195,7 +202,7 @@ export async function clearShoppingList(formData: FormData) {
   revalidatePath("/supermarket");
 }
 
-export async function restoreShoppingItems(items: { list_id: number; name: string; quantity: string | null; category: string | null; notes: string | null }[]) {
+export async function restoreShoppingItems(items: { list_id: number; name: string; quantity: string | null; category: string | null; notes: string | null; product_code: string | null }[]) {
   const supabase = await requireAuth();
   const rows = items.map((i) => ({ ...i, checked: false }));
   const { error } = await supabase.from("shopping_items").insert(rows);
@@ -224,10 +231,11 @@ export async function addShoppingItem(formData: FormData) {
   }
 
   const notes = (formData.get("notes") as string) || null;
+  const product_code = productCode(formData);
 
   const { error } = await supabase
     .from("shopping_items")
-    .insert({ list_id, name, quantity, category, notes });
+    .insert({ list_id, name, quantity, category, notes, product_code });
 
   if (error) throw new Error(error.message);
 
@@ -263,10 +271,13 @@ export async function updateShoppingItem(formData: FormData) {
   const category = (formData.get("category") as string) || null;
 
   const notes = (formData.get("notes") as string) || null;
+  // Only touch the product link when the form sends the field.
+  const update: Record<string, string | null> = { name, quantity, category, notes };
+  if (formData.has("product_code")) update.product_code = productCode(formData);
 
   const { error } = await supabase
     .from("shopping_items")
-    .update({ name, quantity, category, notes })
+    .update(update)
     .eq("id", id);
 
   if (error) throw new Error(error.message);
@@ -295,7 +306,7 @@ export async function reuseShoppingList(formData: FormData) {
       .single(),
     supabase
       .from("shopping_items")
-      .select("name, quantity, category, notes")
+      .select("name, quantity, category, notes, product_code")
       .eq("list_id", list_id),
   ]);
 
@@ -308,6 +319,7 @@ export async function reuseShoppingList(formData: FormData) {
       quantity: item.quantity,
       category: item.category,
       notes: item.notes,
+      product_code: item.product_code,
       checked: false,
     }));
     const { error: itemsError } = await supabase.from("shopping_items").insert(newItems);
@@ -315,6 +327,15 @@ export async function reuseShoppingList(formData: FormData) {
   }
 
   revalidatePath("/supermarket");
+}
+
+export async function searchProducts(query: string): Promise<ProductSearchResult[]> {
+  const q = query.trim().slice(0, 60);
+  if (q.length < 2) return [];
+  const supabase = await requireAuth();
+  const { data, error } = await supabase.rpc("search_shufersal_products", { q, max_results: 8 });
+  if (error) return []; // price data is optional; never break the add form
+  return (data as ProductSearchResult[]) ?? [];
 }
 
 export async function deleteShoppingItem(formData: FormData) {

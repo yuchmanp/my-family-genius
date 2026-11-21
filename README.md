@@ -6,7 +6,7 @@ A home management PWA for families, built with Next.js 16 and Supabase. Manages 
 
 - **Calendar** — Family events with recurring support, Google Calendar iCal sync, and email invites with `.ics` attachments
 - **Chores** — Household task tracking with daily/weekly/monthly frequency, plus a kids' chore schedule grid with streaks
-- **Supermarket** — Shopping lists with categories and a weekly meal plan grid per family member
+- **Supermarket** — Shopping lists with categories and a weekly meal plan grid per family member, with optional Shufersal product search, prices, deals and a list cost estimate
 - **Home Projects** — Kanban-style project board (planned / in-progress / done) with subtasks
 - **School Tests** — Track upcoming tests and grades per kid, with parent overview
 - **Messages** — Family message board for announcements and notes
@@ -140,12 +140,23 @@ Or connect your GitHub repo in the [Vercel Dashboard](https://vercel.com/new) fo
 The app includes a cron endpoint for checking overdue chores:
 
 - **`/api/cron/check-overdue`** — Sends push notifications for overdue chores
+- **`/api/cron/sync-prices`** — Syncs Shufersal prices and deals (see below)
 
-This is configured in `vercel.json` to run daily at 5:00 AM UTC. Vercel Hobby plan supports 1 cron job. For additional crons (e.g., weekly summary), use an external service like [cron-job.org](https://cron-job.org/).
+Both are configured in `vercel.json` (daily at 5:00 AM and 2:20 AM UTC). If your Vercel plan doesn't allow that many cron jobs, call the extra ones from an external service like [cron-job.org](https://cron-job.org/) instead.
 
 The cron endpoint requires a `CRON_SECRET` Bearer token for authentication.
 
-### 11. Gmail email invites (optional)
+### 11. Shufersal prices (optional)
+
+Shopping items can be linked to real Shufersal products. Typing two or more letters in the "Item name" field also searches the Shufersal catalog. Picking a product links the item, so the list shows its price and any current deal, plus an estimated total for unchecked items (regular and with deals).
+
+The data comes from the public price-transparency files Shufersal publishes under Israel's Food Law ([prices.shufersal.co.il](https://prices.shufersal.co.il)). No Shufersal login is used. The nightly `/api/cron/sync-prices` job downloads the latest `PriceFull` and `PromoFull` files for one store and stores them in `shufersal_products` / `shufersal_promotions`. Only public deals are kept, not personal coupons or club-only promotions.
+
+- `SHUFERSAL_STORE_ID` picks the store (default `413`, the Shufersal ONLINE store). Store IDs are listed in the Stores file on the prices site.
+- To load data right away instead of waiting for the night run: `curl -H "Authorization: Bearer $CRON_SECRET" https://<your-app>/api/cron/sync-prices`
+- Prices are an estimate: weighted items, multi-buy deals and substitutions mean the final Shufersal bill can differ.
+
+### 12. Gmail email invites (optional)
 
 To enable calendar event email invites with `.ics` attachments:
 
